@@ -68,3 +68,41 @@ func (repo *JobRepository) SetRunning(ctx context.Context, code string, isRunnin
 		Update("is_running", isRunning).Error
 	return
 }
+
+func (repo *JobRepository) SetActive(ctx context.Context, code string, isActive bool) (err error) {
+	defer func() {
+		if err != nil {
+			logger.Log.Error(
+				"JobRepository.SetActive failed",
+				zap.Error(err),
+				zap.String("code", code),
+				zap.Bool("isActive", isActive),
+			)
+		}
+	}()
+
+	err = repo.db.
+		Model(&models.Job{}).
+		Where("code = ?", code).
+		Update("is_active", isActive).Error
+	return
+}
+
+func (repo *JobRepository) SetSchedule(ctx context.Context, code string, schedule string) (err error) {
+	defer func() {
+		if err != nil {
+			logger.Log.Error(
+				"JobRepository.SetSchedule failed",
+				zap.Error(err),
+				zap.String("code", code),
+				zap.String("schedule", schedule),
+			)
+		}
+	}()
+
+	err = repo.db.
+		Model(&models.Job{}).
+		Where("code = ?", code).
+		Update("schedule", schedule).Error
+	return
+}

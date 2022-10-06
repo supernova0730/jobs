@@ -3,6 +3,7 @@ package config
 import (
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
+	"net"
 	"time"
 )
 
@@ -34,4 +35,8 @@ func Load(envPrefix string, filenames ...string) (Config, error) {
 	}
 
 	return config, nil
+}
+
+func (c Config) HttpAddress() string {
+	return net.JoinHostPort(c.HTTPHost, c.HTTPPort)
 }

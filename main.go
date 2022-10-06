@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"github.com/supernova0730/job/config"
+	"github.com/supernova0730/job/internal/handlers"
 	"github.com/supernova0730/job/internal/repository"
 	"github.com/supernova0730/job/internal/scheduler"
 	"github.com/supernova0730/job/pkg/logger"
@@ -42,10 +43,20 @@ func main() {
 
 	jobRepo := repository.NewJobRepository(db)
 	jobHistoryRepo := repository.NewJobHistoryRepository(db)
+	jobHandler := handlers.New(jobRepo)
 
 	schd := scheduler.New(jobRepo, jobHistoryRepo)
 	go schd.Start(ctx, conf.SchedulerRefreshRate)
 	logger.Log.Info("scheduler started...")
+
+	go func() {
+		err = jobHandler.Start(conf.HttpAddress())
+		if err != nil {
+			logger.Log.Fatal("failed to start http server", zap.Error(err))
+		}
+	}()
+
+	logger.Log.Info("http server started")
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
