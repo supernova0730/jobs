@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"github.com/supernova0730/job/config"
-	"github.com/supernova0730/job/internal/jobs"
 	"github.com/supernova0730/job/internal/repository"
+	"github.com/supernova0730/job/internal/scheduler"
 	"github.com/supernova0730/job/pkg/logger"
 	"github.com/supernova0730/job/pkg/postgres"
 	"go.uber.org/zap"
+	"os"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
@@ -35,14 +38,21 @@ func main() {
 		logger.Log.Fatal("failed to connect to database", zap.Error(err))
 	}
 
+	logger.Log.Info("connected to database...")
+
 	jobRepo := repository.NewJobRepository(db)
 	jobHistoryRepo := repository.NewJobHistoryRepository(db)
 
-	scheduler := jobs.NewScheduler(jobRepo, jobHistoryRepo)
-	err = scheduler.RegisterTasks(ctx)
-	if err != nil {
-		logger.Log.Fatal("failed to register jobs", zap.Error(err))
-	}
+	schd := scheduler.New(jobRepo, jobHistoryRepo)
+	go schd.Start(ctx, conf.SchedulerRefreshRate)
+	logger.Log.Info("scheduler started...")
 
-	scheduler.Start()
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	<-sigChan
+	logger.Log.Info("shutting down...")
+
+	schd.Stop()
+	logger.Log.Info("scheduler stopped")
 }

@@ -1,11 +1,11 @@
-package jobs
+package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/go-co-op/gocron"
 	"github.com/supernova0730/job/internal/models"
-	"github.com/supernova0730/job/internal/repository"
 	"github.com/supernova0730/job/internal/task"
 	"github.com/supernova0730/job/pkg/logger"
 	"github.com/supernova0730/job/pkg/uuid"
@@ -14,29 +14,30 @@ import (
 )
 
 const (
+	ResultUnknown = "UNKNOWN"
 	ResultSuccess = "SUCCESS"
 	ResultError   = "ERROR"
 	ResultPanic   = "PANIC"
 )
 
 type Scheduler struct {
-	s              *gocron.Scheduler
-	jobRepo        *repository.JobRepository
-	jobHistoryRepo *repository.JobHistoryRepository
+	schd           *gocron.Scheduler
+	jobRepo        JobRepository
+	jobHistoryRepo JobHistoryRepository
 }
 
-func NewScheduler(
-	jobRepo *repository.JobRepository,
-	jobHistoryRepo *repository.JobHistoryRepository,
+func New(
+	jobRepo JobRepository,
+	jobHistoryRepo JobHistoryRepository,
 ) *Scheduler {
 	return &Scheduler{
-		s:              gocron.NewScheduler(time.UTC),
+		schd:           gocron.NewScheduler(time.UTC),
 		jobRepo:        jobRepo,
 		jobHistoryRepo: jobHistoryRepo,
 	}
 }
 
-func (s *Scheduler) RegisterTasks(ctx context.Context) (err error) {
+func (s *Scheduler) registerTasks(ctx context.Context) (err error) {
 	jobs, err := s.jobRepo.ListActive(ctx)
 	if err != nil {
 		return
@@ -48,7 +49,7 @@ func (s *Scheduler) RegisterTasks(ctx context.Context) (err error) {
 			return fmt.Errorf("not registered task: %s", job.Code)
 		}
 
-		err = s.registerTask(ctx, job, registeredTask)
+		err = s.registerTask(ctx, registeredTask, job.Schedule)
 		if err != nil {
 			return
 		}
@@ -57,17 +58,17 @@ func (s *Scheduler) RegisterTasks(ctx context.Context) (err error) {
 	return nil
 }
 
-func (s *Scheduler) registerTask(ctx context.Context, job models.Job, task task.Task) error {
-	_, err := s.s.CronWithSeconds(job.Schedule).Tag(job.Code).Do(func() {
+func (s *Scheduler) registerTask(ctx context.Context, task task.Task, schedule string) error {
+	_, err := s.schd.CronWithSeconds(schedule).Tag(task.Code()).Do(func() {
 		id := uuid.Generate()
 		log := logger.Log.
-			Named(fmt.Sprintf("[%s]", job.Code)).
+			Named(fmt.Sprintf("[%s]", task.Code())).
 			With(zap.String("id", id))
 
 		log.Info("started")
 		started := time.Now()
 
-		jobHistoryID, err := s.setJobStarting(ctx, job.Code)
+		jobHistoryID, err := s.before(ctx, task.Code())
 		if err != nil {
 			log.Error("set job starting failed", zap.Error(err))
 		}
@@ -75,7 +76,7 @@ func (s *Scheduler) registerTask(ctx context.Context, job models.Job, task task.
 		defer func() {
 			if r := recover(); r != nil {
 				log.Error("panic", zap.Any("recover", r))
-				if err := s.setJobStopping(ctx, job.Code, jobHistoryID, ResultPanic, r.(error).Error()); err != nil {
+				if err := s.after(ctx, task.Code(), jobHistoryID, ResultPanic, r.(error).Error()); err != nil {
 					log.Error("set job stopping failed", zap.Error(err))
 				}
 			}
@@ -91,7 +92,7 @@ func (s *Scheduler) registerTask(ctx context.Context, job models.Job, task task.
 			resultMessage = err.Error()
 		}
 
-		err = s.setJobStopping(ctx, job.Code, jobHistoryID, result, resultMessage)
+		err = s.after(ctx, task.Code(), jobHistoryID, result, resultMessage)
 		if err != nil {
 			log.Error("set job stopping failed", zap.Error(err))
 		}
@@ -106,7 +107,23 @@ func (s *Scheduler) registerTask(ctx context.Context, job models.Job, task task.
 	return err
 }
 
-func (s *Scheduler) setJobStarting(ctx context.Context, code string) (jobHistoryID int64, err error) {
+func (s *Scheduler) refresh(ctx context.Context) (err error) {
+	codes, err := s.jobRepo.ListCodes(ctx)
+	if err != nil {
+		return
+	}
+
+	for _, code := range codes {
+		err = s.schd.RemoveByTag(code)
+		if err != nil && !errors.Is(err, gocron.ErrJobNotFoundWithTag) {
+			return
+		}
+	}
+
+	return s.registerTasks(ctx)
+}
+
+func (s *Scheduler) before(ctx context.Context, code string) (jobHistoryID int64, err error) {
 	err = s.jobRepo.SetRunning(ctx, code, true)
 	if err != nil {
 		return
@@ -115,10 +132,11 @@ func (s *Scheduler) setJobStarting(ctx context.Context, code string) (jobHistory
 	return s.jobHistoryRepo.Insert(ctx, models.JobHistory{
 		JobCode: code,
 		Started: time.Now(),
+		Result:  ResultUnknown,
 	})
 }
 
-func (s *Scheduler) setJobStopping(
+func (s *Scheduler) after(
 	ctx context.Context,
 	code string,
 	jobHistoryID int64,
@@ -137,10 +155,25 @@ func (s *Scheduler) setJobStopping(
 	})
 }
 
-func (s *Scheduler) Start() {
-	s.s.StartBlocking()
+func (s *Scheduler) Start(ctx context.Context, refreshRate time.Duration) {
+	s.schd.StartAsync()
+
+	ticker := time.NewTicker(refreshRate)
+	for {
+		err := s.refresh(ctx)
+		if err != nil {
+			logger.Log.Fatal("failed to reset scheduler", zap.Error(err))
+		}
+
+		select {
+		case <-ctx.Done():
+			ticker.Stop()
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *Scheduler) Stop() {
-	s.s.Stop()
+	s.schd.Stop()
 }

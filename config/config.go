@@ -3,6 +3,7 @@ package config
 import (
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
+	"time"
 )
 
 type Config struct {
@@ -12,6 +13,8 @@ type Config struct {
 	DBPassword string `envconfig:"DB_PASSWORD" required:"true"`
 	DBName     string `envconfig:"DB_NAME" required:"true"`
 	DBSSLMode  string `envconfig:"DB_SSLMODE" default:"disable"`
+
+	SchedulerRefreshRate time.Duration `envconfig:"SCHD_REFRESH_RATE" default:"30s"`
 
 	HTTPHost string `envconfig:"HTTP_HOST" default:"localhost"`
 	HTTPPort string `envconfig:"HTTP_PORT" required:"true"`

@@ -33,6 +33,23 @@ func (repo *JobRepository) ListActive(ctx context.Context) (result []models.Job,
 	return
 }
 
+func (repo *JobRepository) ListCodes(ctx context.Context) (result []string, err error) {
+	defer func() {
+		if err != nil {
+			logger.Log.Error(
+				"JobRepository.ListActiveCodes failed",
+				zap.Error(err),
+			)
+		}
+	}()
+
+	err = repo.db.
+		Model(&models.Job{}).
+		Select("code").
+		Find(&result).Error
+	return
+}
+
 func (repo *JobRepository) SetRunning(ctx context.Context, code string, isRunning bool) (err error) {
 	defer func() {
 		if err != nil {
